@@ -1,90 +1,295 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-type Note = { id: number; text: string; created_at: string };
+type Note = {
+  id: number;
+  title: string;
+  text: string;
+  created_at: string;
+  updated_at: string;
+};
+
+function displayTitle(n: Note) {
+  if (n.title.trim()) return n.title.trim();
+  const oneLine = n.text.replace(/\s+/g, " ").trim();
+  return oneLine ? oneLine.slice(0, 48) + (oneLine.length > 48 ? "…" : "") : "Untitled";
+}
 
 export default function Home() {
   const [notes, setNotes] = useState<Note[]>([]);
-  const [text, setText] = useState("");
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [query, setQuery] = useState("");
+  const [titleDraft, setTitleDraft] = useState("");
+  const [bodyDraft, setBodyDraft] = useState("");
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [isNew, setIsNew] = useState(false); // "new note" editor open
 
-  async function refresh() {
+  async function refresh(selectAfter?: number) {
     const res = await fetch("/api/notes", { cache: "no-store" });
-    setNotes(await res.json());
+    const data: Note[] = await res.json();
+    setNotes(data);
     setLoading(false);
+    if (selectAfter != null) setSelectedId(selectAfter);
+    else if (selectedId == null && data.length) setSelectedId(data[0].id);
   }
 
   useEffect(() => {
     refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function addNote(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = text.trim();
-    if (!trimmed || busy) return;
-    setBusy(true);
-    await fetch("/api/notes", {
+  const selected = useMemo(
+    () => notes.find((n) => n.id === selectedId) ?? null,
+    [notes, selectedId]
+  );
+
+  useEffect(() => {
+    setTitleDraft(selected?.title ?? "");
+    setBodyDraft(selected?.text ?? "");
+    setIsNew(false);
+  }, [selected?.id, selected?.title, selected?.text]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return notes;
+    return notes.filter(
+      (n) =>
+        n.title.toLowerCase().includes(q) || n.text.toLowerCase().includes(q)
+    );
+  }, [notes, query]);
+
+  function startNew() {
+    setSelectedId(null);
+    setTitleDraft("");
+    setBodyDraft("");
+    setIsNew(true);
+    setMenuOpen(false);
+  }
+
+  async function createNote() {
+    if (saving) return;
+    const title = titleDraft.trim();
+    const text = bodyDraft.trim();
+    if (!title && !text) {
+      setIsNew(false);
+      return;
+    }
+    setSaving(true);
+    const res = await fetch("/api/notes", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: trimmed }),
+      body: JSON.stringify({ title, text }),
     });
-    setText("");
-    await refresh();
-    setBusy(false);
+    const created: Note = await res.json();
+    setIsNew(false);
+    await refresh(created.id);
+    setSaving(false);
+  }
+
+  async function saveEdit() {
+    if (!selected || saving) return;
+    const title = titleDraft.trim();
+    const text = bodyDraft.trim();
+    if (!title && !text) return;
+    if (title === selected.title && text === selected.text) return;
+    setSaving(true);
+    await fetch(`/api/notes/${selected.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, text }),
+    });
+    await refresh(selected.id);
+    setSaving(false);
   }
 
   async function removeNote(id: number) {
     await fetch(`/api/notes/${id}`, { method: "DELETE" });
+    if (selectedId === id) {
+      setSelectedId(null);
+      setTitleDraft("");
+      setBodyDraft("");
+    }
     await refresh();
   }
 
+  const dirty =
+    selected != null &&
+    (titleDraft.trim() !== selected.title || bodyDraft.trim() !== selected.text);
+
+  const editorOpen = isNew || selected != null;
+
   return (
-    <main className="mx-auto max-w-2xl px-6 py-10">
-      <h1 className="mb-6 text-3xl font-bold">Notes</h1>
-
-      <form onSubmit={addNote} className="mb-6 flex gap-2">
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Write a note..."
-          className="flex-1 rounded-lg border border-gray-300 px-4 py-2 outline-none focus:border-blue-500"
-        />
-        <button
-          type="submit"
-          disabled={busy || !text.trim()}
-          className="rounded-lg bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-        >
-          Add
-        </button>
-      </form>
-
-      {loading ? (
-        <p className="text-gray-500">Loading...</p>
-      ) : notes.length === 0 ? (
-        <p className="text-gray-500">No notes yet. Add one above.</p>
-      ) : (
-        <ul className="space-y-2">
-          {notes.map((n) => (
-            <li
-              key={n.id}
-              className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 bg-white px-4 py-3"
+    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+      <div className="mx-auto flex h-screen max-w-6xl flex-col px-3 py-3 md:px-6 md:py-6">
+        <header className="mb-3 flex items-center justify-between md:mb-6">
+          <h1 className="text-xl font-bold tracking-tight md:text-2xl">Notes</h1>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={startNew}
+              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium hover:bg-emerald-500"
             >
-              <div>
-                <p className="text-gray-900">{n.text}</p>
-                <p className="mt-1 text-xs text-gray-400">{n.created_at}</p>
+              + New note
+            </button>
+            <button
+              onClick={() => setMenuOpen((v) => !v)}
+              className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm md:hidden"
+            >
+              {menuOpen ? "Close" : "List ▾"}
+            </button>
+          </div>
+        </header>
+
+        <div className="grid flex-1 grid-cols-1 gap-3 overflow-hidden md:grid-cols-[320px_1fr] md:gap-6">
+          {/* Sidebar */}
+          <aside
+            className={`flex min-h-0 flex-col rounded-xl border border-zinc-800 bg-zinc-900/60 ${
+              menuOpen ? "flex" : "hidden md:flex"
+            }`}
+          >
+            <div className="border-b border-zinc-800 p-3">
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search…"
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <ul className="min-h-0 flex-1 overflow-y-auto p-2">
+              {loading ? (
+                <li className="p-3 text-sm text-zinc-500">Loading…</li>
+              ) : filtered.length === 0 ? (
+                <li className="p-3 text-sm text-zinc-500">No notes.</li>
+              ) : (
+                filtered.map((n) => {
+                  const active = n.id === selectedId && !isNew;
+                  return (
+                    <li key={n.id}>
+                      <button
+                        onClick={() => {
+                          setSelectedId(n.id);
+                          setMenuOpen(false);
+                        }}
+                        className={`group mb-1 w-full rounded-lg px-3 py-2 text-left transition ${
+                          active
+                            ? "bg-emerald-600/15 ring-1 ring-emerald-600/50"
+                            : "hover:bg-zinc-800/70"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate text-sm font-medium">
+                            {displayTitle(n)}
+                          </span>
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeNote(n.id);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.stopPropagation();
+                                removeNote(n.id);
+                              }
+                            }}
+                            className="shrink-0 rounded px-1 text-xs text-zinc-500 opacity-0 transition hover:text-red-400 group-hover:opacity-100"
+                            title="Delete"
+                          >
+                            ✕
+                          </span>
+                        </div>
+                        <div className="mt-0.5 truncate text-[11px] text-zinc-500">
+                          {n.text.replace(/\s+/g, " ").trim() || "—"}
+                        </div>
+                      </button>
+                    </li>
+                  );
+                })
+              )}
+            </ul>
+          </aside>
+
+          {/* Editor */}
+          <section className="flex min-h-0 flex-col rounded-xl border border-zinc-800 bg-zinc-900/40">
+            {editorOpen ? (
+              <>
+                <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+                  <div className="text-xs text-zinc-500">
+                    {isNew
+                      ? "New note"
+                      : selected
+                      ? `Updated ${selected.updated_at}`
+                      : ""}
+                  </div>
+                  <div className="flex gap-2">
+                    {isNew ? (
+                      <>
+                        <button
+                          onClick={createNote}
+                          disabled={saving}
+                          className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium hover:bg-emerald-500 disabled:opacity-40"
+                        >
+                          {saving ? "Saving…" : "Create"}
+                        </button>
+                        <button
+                          onClick={() => setIsNew(false)}
+                          className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-400 hover:border-zinc-500"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        {dirty && (
+                          <button
+                            onClick={saveEdit}
+                            disabled={saving}
+                            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium hover:bg-emerald-500 disabled:opacity-40"
+                          >
+                            {saving ? "Saving…" : "Save"}
+                          </button>
+                        )}
+                        {selected && (
+                          <button
+                            onClick={() => removeNote(selected.id)}
+                            className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-red-400 hover:border-red-500"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <input
+                  value={titleDraft}
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  onBlur={isNew ? undefined : saveEdit}
+                  placeholder="Title (optional)"
+                  className="border-b border-zinc-800 bg-transparent px-4 py-3 text-lg font-semibold outline-none placeholder:text-zinc-600 md:px-6"
+                />
+                <textarea
+                  value={bodyDraft}
+                  onChange={(e) => setBodyDraft(e.target.value)}
+                  onBlur={isNew ? undefined : saveEdit}
+                  className="min-h-0 flex-1 resize-none bg-transparent p-4 font-mono text-sm leading-relaxed outline-none md:p-6"
+                  placeholder="Write something…"
+                  autoFocus={isNew}
+                />
+              </>
+            ) : (
+              <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-zinc-500">
+                Select a note, or click <span className="mx-1 font-semibold text-emerald-400">+ New note</span> to start.
               </div>
-              <button
-                onClick={() => removeNote(n.id)}
-                className="text-sm text-red-600 hover:underline"
-              >
-                Delete
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </main>
+            )}
+          </section>
+        </div>
+      </div>
+    </div>
   );
 }
