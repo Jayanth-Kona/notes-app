@@ -10,7 +10,7 @@ export async function DELETE(
   if (!Number.isInteger(numId) || numId <= 0) {
     return NextResponse.json({ error: "invalid id" }, { status: 400 });
   }
-  const ok = deleteNote(numId);
+  const ok = await deleteNote(numId);
   if (!ok) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json({ ok: true });
 }
